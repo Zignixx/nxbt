@@ -23,24 +23,56 @@
         <main>
             <section id="controller-selection">
                 <h1>Create a Controller</h1>
-                <div class="hidden surface controller-option" onclick="createJoyConL()">
-                    <div class="controller-option-img-wrapper">
-                        <img src="joyconl.svg" draggable="false">
-                    </div>
-                    Joy-Con (L)
+                <div id="saved-switches-container" class="surface">
+                    <h2>Saved Switches</h2>
+                    <div id="saved-switches-list"></div>
+                    <button onclick="showNewSwitchOption()" class="new-switch-btn">+ New Switch Console</button>
                 </div>
-                <div class="surface controller-option" onclick="createProController()">
-                    <div class="controller-option-img-wrapper">
-                        <img src="procon.svg" draggable="false">
+                <div id="new-switch-options" class="hidden">
+                    <h2>Select Controller Type</h2>
+                    <div class="hidden surface controller-option" onclick="createJoyConL()">
+                        <div class="controller-option-img-wrapper">
+                            <img src="joyconl.svg" draggable="false">
+                        </div>
+                        Joy-Con (L)
                     </div>
-                    Pro Controller
-                </div>
-                <div class="hidden surface controller-option" onclick="createJoyConR()">
-                    <div class="controller-option-img-wrapper">
-                        <img src="joyconr.svg" draggable="false">
+                    <div class="surface controller-option" onclick="createProController()">
+                        <div class="controller-option-img-wrapper">
+                            <img src="procon.svg" draggable="false">
+                        </div>
+                        Pro Controller
                     </div>
-                    Joy-Con (R)
+                    <div class="hidden surface controller-option" onclick="createJoyConR()">
+                        <div class="controller-option-img-wrapper">
+                            <img src="joyconr.svg" draggable="false">
+                        </div>
+                        Joy-Con (R)
+                    </div>
                 </div>
+            </section>
+
+            <section id="switch-management" class="surface hidden">
+                <h1>Manage Saved Switches</h1>
+                <div id="switch-management-list"></div>
+                <button onclick="closeSwitchManagement()">Close</button>
+            </section>
+
+            <section id="macro-management" class="surface hidden">
+                <h1>Macro Management</h1>
+                <div class="macro-management-controls">
+                    <button onclick="showNewMacroForm()">+ New Macro</button>
+                    <button onclick="closeMacroManagement()">Close</button>
+                </div>
+                <div id="macro-form" class="hidden surface-lighter">
+                    <h2 id="macro-form-title">New Macro</h2>
+                    <input type="text" id="macro-name-input" placeholder="Macro Name" onfocus="disableKeyHandlers()" onblur="enableKeyHandlers()">
+                    <textarea id="macro-content-input" class="mono" placeholder="Type Your Macro Here" onfocus="disableKeyHandlers()" onblur="enableKeyHandlers()"></textarea>
+                    <div>
+                        <button onclick="saveMacroForm()">Save</button>
+                        <button onclick="cancelMacroForm()">Cancel</button>
+                    </div>
+                </div>
+                <div id="saved-macros-list"></div>
             </section>
 
             <section id="loader" class="surface hidden">
@@ -198,14 +230,37 @@
                     <button onclick="shutdownController()">Shutdown Controller</button>
                     <button onclick="recreateProController()">Recreate Controller</button>
                     <button onclick="restartController()">Restart Controller</button>
+                    <button onclick="openSwitchManagement()">Manage Switches</button>
+
+                    <h2 class="surface-lighter">Macro Management</h2>
+                    <button onclick="openMacroManagement()">Manage Macros</button>
+                    <div id="saved-macros-dropdown" class="surface-lighter">
+                        <label>Load Saved Macro:</label>
+                        <select id="macro-select" onchange="loadSelectedMacro()">
+                            <option value="">-- Select a macro --</option>
+                        </select>
+                    </div>
 
                     <h2 class="surface-lighter">Controller Macro</h2>
+                    <div id="macro-status-indicator" class="hidden surface-lighter macro-status">
+                        <div class="macro-status-content">
+                            <div class="macro-status-icon">
+                                <div class="spinner"></div>
+                            </div>
+                            <div class="macro-status-text">
+                                <strong>Macro Running...</strong>
+                                <p id="macro-status-details">Executing macro commands</p>
+                            </div>
+                        </div>
+                        <button onclick="stopRunningMacro()" class="stop-macro-btn">Stop Macro</button>
+                    </div>
                     <p>
                         <strong>Note:</strong> the main input device will override a running
                         macro.
                     </p>
                     <textarea id="macro-text" class="mono" placeholder="Type Your Macro Here" onfocus="disableKeyHandlers()" onblur="enableKeyHandlers()"></textarea>
-                    <button onclick="sendMacro()">Run Macro</button>
+                    <button onclick="sendMacro()" id="run-macro-btn">Run Macro</button>
+                    <button onclick="saveCurrentMacro()">Save Current Macro</button>
                 </div>
             </section>
 

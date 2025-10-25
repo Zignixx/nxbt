@@ -204,6 +204,8 @@ socket.on('state', function(state) {
 
 socket.on('connect', function() {
     console.log("Connected");
+    socket.emit('get_switch_macs');
+    socket.emit('get_macros');
 });
 
 checkForLoadInterval = false;
@@ -377,7 +379,7 @@ function displayError(errorText) {
     }, 10000);
 }
 
-function createProController() {
+function createProControllerOld() {
     HTML_CONTROLLER_SELECTION.classList.add('hidden');
     HTML_LOADER.classList.remove('hidden');
 
@@ -405,6 +407,28 @@ function checkForLoad() {
         HTML_LOADER_TEXT.innerHTML = controller_state;
 
         if (controller_state === ControllerState.CONNECTED) {
+            // Save the MAC address if connection was successful and it's a new Switch
+            if (STATE[NXBT_CONTROLLER_INDEX].last_connection) {
+                let macAddress = STATE[NXBT_CONTROLLER_INDEX].last_connection;
+                
+                // Only prompt for name if this is a new MAC address
+                if (!SAVED_SWITCHES[macAddress]) {
+                    let name = prompt('Connection successful! Give this Switch a name:', 'My Switch');
+                    if (name && name.trim()) {
+                        socket.emit('controller_connected', {
+                            mac_address: macAddress,
+                            name: name.trim()
+                        });
+                    }
+                } else {
+                    // Update last connected time for existing Switch
+                    socket.emit('controller_connected', {
+                        mac_address: macAddress,
+                        name: SAVED_SWITCHES[macAddress].name
+                    });
+                }
+            }
+            
             // Show the connected message for 1 second
             setTimeout(function() {
                 clearInterval(checkForLoadInterval);
@@ -644,7 +668,360 @@ function eventLoop() {
 
 function sendMacro() {
     let macro = HTML_MACRO_TEXT.value.toUpperCase();
+    if (!macro.trim()) {
+        alert('Please enter a macro first');
+        return;
+    }
     socket.emit('macro', JSON.stringify([NXBT_CONTROLLER_INDEX, macro]));
+}
+
+/**********************************************/
+/* Macro Status Management */
+/**********************************************/
+
+let CURRENT_MACRO_ID = null;
+let HTML_MACRO_STATUS = document.getElementById('macro-status-indicator');
+let HTML_RUN_MACRO_BTN = document.getElementById('run-macro-btn');
+
+socket.on('macro_started', function(data) {
+    CURRENT_MACRO_ID = data.macro_id;
+    showMacroRunning();
+});
+
+socket.on('macro_completed', function(data) {
+    if (data.macro_id === CURRENT_MACRO_ID) {
+        CURRENT_MACRO_ID = null;
+        hideMacroRunning();
+    }
+});
+
+socket.on('macro_stopped', function(data) {
+    if (data.macro_id === CURRENT_MACRO_ID) {
+        CURRENT_MACRO_ID = null;
+        hideMacroRunning();
+    }
+});
+
+socket.on('macro_status', function(data) {
+    if (data.running) {
+        CURRENT_MACRO_ID = data.macro_info.macro_id;
+        showMacroRunning();
+    } else {
+        CURRENT_MACRO_ID = null;
+        hideMacroRunning();
+    }
+});
+
+function showMacroRunning() {
+    HTML_MACRO_STATUS.classList.remove('hidden');
+    HTML_RUN_MACRO_BTN.disabled = true;
+    HTML_RUN_MACRO_BTN.style.opacity = '0.5';
+    HTML_RUN_MACRO_BTN.style.cursor = 'not-allowed';
+}
+
+function hideMacroRunning() {
+    HTML_MACRO_STATUS.classList.add('hidden');
+    HTML_RUN_MACRO_BTN.disabled = false;
+    HTML_RUN_MACRO_BTN.style.opacity = '1';
+    HTML_RUN_MACRO_BTN.style.cursor = 'pointer';
+}
+
+function stopRunningMacro() {
+    if (CURRENT_MACRO_ID) {
+        socket.emit('stop_macro');
+    }
+}
+
+// Request macro status on page load
+window.addEventListener('load', function() {
+    socket.emit('get_macro_status');
+});
+
+/**********************************************/
+/* Switch MAC Address Management */
+/**********************************************/
+
+let SAVED_SWITCHES = {};
+let CURRENT_EDITING_MAC = null;
+
+socket.on('switch_macs', function(macs) {
+    SAVED_SWITCHES = macs;
+    updateSavedSwitchesList();
+    updateSwitchManagementList();
+});
+
+socket.on('switch_macs_updated', function(macs) {
+    SAVED_SWITCHES = macs;
+    updateSavedSwitchesList();
+    updateSwitchManagementList();
+});
+
+function updateSavedSwitchesList() {
+    let container = document.getElementById('saved-switches-list');
+    container.innerHTML = '';
+    
+    let macAddresses = Object.keys(SAVED_SWITCHES);
+    
+    if (macAddresses.length === 0) {
+        container.innerHTML = '<p class="no-switches-msg">No saved Switch consoles. Click "New Switch Console" to connect to a new device.</p>';
+        return;
+    }
+    
+    macAddresses.forEach(function(mac) {
+        let switchData = SAVED_SWITCHES[mac];
+        let switchCard = document.createElement('div');
+        switchCard.className = 'surface switch-card';
+        switchCard.innerHTML = `
+            <div class="switch-card-info">
+                <h3>${switchData.name}</h3>
+                <p class="mono">${mac}</p>
+                <p class="switch-last-connected">Last connected: ${new Date(switchData.last_connected).toLocaleString()}</p>
+            </div>
+            <button onclick="connectToSwitch('${mac}')">Connect</button>
+        `;
+        container.appendChild(switchCard);
+    });
+}
+
+function updateSwitchManagementList() {
+    let container = document.getElementById('switch-management-list');
+    container.innerHTML = '';
+    
+    let macAddresses = Object.keys(SAVED_SWITCHES);
+    
+    if (macAddresses.length === 0) {
+        container.innerHTML = '<p>No saved Switch consoles.</p>';
+        return;
+    }
+    
+    macAddresses.forEach(function(mac) {
+        let switchData = SAVED_SWITCHES[mac];
+        let switchItem = document.createElement('div');
+        switchItem.className = 'surface-lighter switch-management-item';
+        switchItem.innerHTML = `
+            <div>
+                <input type="text" value="${switchData.name}" id="switch-name-${mac}" onfocus="disableKeyHandlers()" onblur="enableKeyHandlers()">
+                <p class="mono">${mac}</p>
+            </div>
+            <div class="switch-management-actions">
+                <button onclick="updateSwitchName('${mac}')">Update Name</button>
+                <button onclick="deleteSwitchMAC('${mac}')" class="delete-btn">Delete</button>
+            </div>
+        `;
+        container.appendChild(switchItem);
+    });
+}
+
+function showNewSwitchOption() {
+    document.getElementById('new-switch-options').classList.remove('hidden');
+}
+
+function connectToSwitch(mac) {
+    HTML_CONTROLLER_SELECTION.classList.add('hidden');
+    HTML_LOADER.classList.remove('hidden');
+    socket.emit('web_create_pro_controller', mac);
+}
+
+function createProController() {
+    HTML_CONTROLLER_SELECTION.classList.add('hidden');
+    HTML_LOADER.classList.remove('hidden');
+    socket.emit('web_create_pro_controller', null);
+}
+
+function updateSwitchName(mac) {
+    let nameInput = document.getElementById(`switch-name-${mac}`);
+    let newName = nameInput.value.trim();
+    
+    if (newName) {
+        socket.emit('update_switch_name', {
+            mac_address: mac,
+            name: newName
+        });
+    }
+}
+
+function deleteSwitchMAC(mac) {
+    if (confirm('Are you sure you want to delete this saved Switch?')) {
+        socket.emit('delete_switch_mac', mac);
+    }
+}
+
+function openSwitchManagement() {
+    document.getElementById('switch-management').classList.remove('hidden');
+}
+
+function closeSwitchManagement() {
+    document.getElementById('switch-management').classList.add('hidden');
+}
+
+/**********************************************/
+/* Macro Management */
+/**********************************************/
+
+let SAVED_MACROS = {};
+let CURRENT_EDITING_MACRO = null;
+
+socket.on('macros', function(macros) {
+    SAVED_MACROS = macros;
+    updateMacrosList();
+    updateMacroDropdown();
+});
+
+socket.on('macros_updated', function(macros) {
+    SAVED_MACROS = macros;
+    updateMacrosList();
+    updateMacroDropdown();
+});
+
+function updateMacrosList() {
+    let container = document.getElementById('saved-macros-list');
+    container.innerHTML = '';
+    
+    let macroNames = Object.keys(SAVED_MACROS);
+    
+    if (macroNames.length === 0) {
+        container.innerHTML = '<p>No saved macros. Click "New Macro" to create one.</p>';
+        return;
+    }
+    
+    macroNames.forEach(function(name) {
+        let macroData = SAVED_MACROS[name];
+        let macroCard = document.createElement('div');
+        macroCard.className = 'surface-lighter macro-card';
+        macroCard.innerHTML = `
+            <div class="macro-card-header">
+                <h3>${name}</h3>
+                <div class="macro-card-actions">
+                    <button onclick="loadMacroToEditor('${name}')">Load</button>
+                    <button onclick="editMacro('${name}')">Edit</button>
+                    <button onclick="deleteMacro('${name}')" class="delete-btn">Delete</button>
+                </div>
+            </div>
+            <pre class="macro-preview mono">${macroData.content}</pre>
+        `;
+        container.appendChild(macroCard);
+    });
+}
+
+function updateMacroDropdown() {
+    let select = document.getElementById('macro-select');
+    select.innerHTML = '<option value="">-- Select a macro --</option>';
+    
+    Object.keys(SAVED_MACROS).forEach(function(name) {
+        let option = document.createElement('option');
+        option.value = name;
+        option.textContent = name;
+        select.appendChild(option);
+    });
+}
+
+function openMacroManagement() {
+    document.getElementById('macro-management').classList.remove('hidden');
+}
+
+function closeMacroManagement() {
+    document.getElementById('macro-management').classList.add('hidden');
+    cancelMacroForm();
+}
+
+function showNewMacroForm() {
+    CURRENT_EDITING_MACRO = null;
+    document.getElementById('macro-form-title').textContent = 'New Macro';
+    document.getElementById('macro-name-input').value = '';
+    document.getElementById('macro-content-input').value = '';
+    document.getElementById('macro-form').classList.remove('hidden');
+}
+
+function editMacro(macroName) {
+    CURRENT_EDITING_MACRO = macroName;
+    let macroData = SAVED_MACROS[macroName];
+    document.getElementById('macro-form-title').textContent = 'Edit Macro';
+    document.getElementById('macro-name-input').value = macroName;
+    document.getElementById('macro-content-input').value = macroData.content;
+    document.getElementById('macro-form').classList.remove('hidden');
+}
+
+function saveMacroForm() {
+    let name = document.getElementById('macro-name-input').value.trim();
+    let content = document.getElementById('macro-content-input').value.trim();
+    
+    if (!name) {
+        alert('Please enter a macro name');
+        return;
+    }
+    
+    if (!content) {
+        alert('Please enter macro content');
+        return;
+    }
+    
+    if (CURRENT_EDITING_MACRO && CURRENT_EDITING_MACRO !== name) {
+        // Updating with name change
+        socket.emit('update_macro', {
+            old_name: CURRENT_EDITING_MACRO,
+            new_name: name,
+            content: content
+        });
+    } else if (CURRENT_EDITING_MACRO) {
+        // Updating without name change
+        socket.emit('update_macro', {
+            old_name: CURRENT_EDITING_MACRO,
+            new_name: name,
+            content: content
+        });
+    } else {
+        // New macro
+        socket.emit('save_macro', {
+            name: name,
+            content: content
+        });
+    }
+    
+    cancelMacroForm();
+}
+
+function cancelMacroForm() {
+    CURRENT_EDITING_MACRO = null;
+    document.getElementById('macro-form').classList.add('hidden');
+}
+
+function deleteMacro(macroName) {
+    if (confirm(`Are you sure you want to delete the macro "${macroName}"?`)) {
+        socket.emit('delete_macro', macroName);
+    }
+}
+
+function loadMacroToEditor(macroName) {
+    let macroData = SAVED_MACROS[macroName];
+    HTML_MACRO_TEXT.value = macroData.content;
+    closeMacroManagement();
+}
+
+function loadSelectedMacro() {
+    let select = document.getElementById('macro-select');
+    let macroName = select.value;
+    
+    if (macroName && SAVED_MACROS[macroName]) {
+        HTML_MACRO_TEXT.value = SAVED_MACROS[macroName].content;
+    }
+}
+
+function saveCurrentMacro() {
+    let content = HTML_MACRO_TEXT.value.trim();
+    
+    if (!content) {
+        alert('Please enter macro content first');
+        return;
+    }
+    
+    let name = prompt('Enter a name for this macro:');
+    
+    if (name && name.trim()) {
+        socket.emit('save_macro', {
+            name: name.trim(),
+            content: content
+        });
+    }
 }
 
 /**********************************************/
