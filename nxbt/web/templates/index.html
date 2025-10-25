@@ -22,12 +22,22 @@
 
         <main>
             <section id="controller-selection">
-                <h1>Create a Controller</h1>
+                <h1>Controller Management</h1>
+                
+                <!-- Active Controller Sessions -->
+                <div id="active-sessions-container" class="surface">
+                    <h2>Active Controller Sessions</h2>
+                    <div id="active-sessions-list"></div>
+                    <button onclick="refreshActiveSessions()" class="refresh-sessions-btn">🔄 Refresh Sessions</button>
+                </div>
+
+                <!-- Saved Switches -->
                 <div id="saved-switches-container" class="surface">
-                    <h2>Saved Switches</h2>
+                    <h2>Create New Controller</h2>
                     <div id="saved-switches-list"></div>
                     <button onclick="showNewSwitchOption()" class="new-switch-btn">+ New Switch Console</button>
                 </div>
+                
                 <div id="new-switch-options" class="hidden">
                     <h2>Select Controller Type</h2>
                     <div class="hidden surface controller-option" onclick="createJoyConL()">
@@ -226,6 +236,16 @@
                     </div>
                 </div>
                 <div id="controller-commands" class="controller-config-subsection">
+                    <h2 class="surface-lighter">Session Management</h2>
+                    <div id="current-session-info" class="surface-lighter">
+                        <strong>Current Session:</strong>
+                        <span id="session-controller-index">-</span> | 
+                        <span id="session-switch-name">Unknown</span> |
+                        <span id="session-client-count">0 clients</span>
+                    </div>
+                    <button onclick="leaveControllerSession()">Leave Session</button>
+                    <button onclick="forceRemoveController()" class="delete-btn">Remove Controller (All Clients)</button>
+
                     <h2 class="surface-lighter">Controller Commands</h2>
                     <button onclick="shutdownController()">Shutdown Controller</button>
                     <button onclick="recreateProController()">Recreate Controller</button>

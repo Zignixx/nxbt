@@ -46,6 +46,8 @@ sio = SocketIO(app, cookie=False)
 user_info_lock = RLock()
 USER_INFO = {}
 RUNNING_MACROS = {}  # Track running macros: {session_id: {'macro_id': str, 'controller_index': int}}
+ACTIVE_CONTROLLERS = {}  # Track active controllers: {controller_index: {'clients': set(), 'mac_address': str, 'created_at': str}}
+SESSION_TO_CONTROLLER = {}  # Map session_id to controller_index for quick lookup
 
 
 # Helper functions for data management
@@ -83,6 +85,9 @@ def index():
 def on_connect():
     with user_info_lock:
         USER_INFO[request.sid] = {}
+    
+    # Send list of active controllers to the new client
+    emit('active_controllers', get_active_controllers_info())
 
 
 @sio.on('state')
@@ -109,10 +114,29 @@ def on_disconnect():
                 )
                 del RUNNING_MACROS[request.sid]
             
-            # Remove controller
-            index = USER_INFO[request.sid]["controller_index"]
-            nxbt.remove_controller(index)
-        except KeyError:
+            # Check if this session was controlling a controller
+            if request.sid in SESSION_TO_CONTROLLER:
+                controller_index = SESSION_TO_CONTROLLER[request.sid]
+                
+                # Remove this client from the controller's client list
+                if controller_index in ACTIVE_CONTROLLERS:
+                    ACTIVE_CONTROLLERS[controller_index]['clients'].discard(request.sid)
+                    
+                    # Only remove controller if no clients are left
+                    if not ACTIVE_CONTROLLERS[controller_index]['clients']:
+                        nxbt.remove_controller(controller_index)
+                        del ACTIVE_CONTROLLERS[controller_index]
+                        print(f"Removed controller {controller_index} - no clients left")
+                    else:
+                        print(f"Controller {controller_index} still has {len(ACTIVE_CONTROLLERS[controller_index]['clients'])} clients")
+                
+                del SESSION_TO_CONTROLLER[request.sid]
+            
+            # Clean up user info
+            if request.sid in USER_INFO:
+                del USER_INFO[request.sid]
+        except KeyError as e:
+            print(f"KeyError during disconnect: {e}")
             pass
 
 
@@ -137,8 +161,20 @@ def on_create_controller(mac_address=None):
         with user_info_lock:
             USER_INFO[request.sid]["controller_index"] = index
             USER_INFO[request.sid]["target_mac"] = mac_address
+            
+            # Register this controller as active
+            ACTIVE_CONTROLLERS[index] = {
+                'clients': {request.sid},
+                'mac_address': mac_address,
+                'created_at': datetime.now().isoformat(),
+                'controller_type': 'Pro Controller'
+            }
+            SESSION_TO_CONTROLLER[request.sid] = index
 
         emit('create_pro_controller', index)
+        
+        # Broadcast updated active controllers to all clients
+        sio.emit('active_controllers', get_active_controllers_info())
     except Exception as e:
         emit('error', str(e))
 
@@ -278,6 +314,130 @@ def on_update_macro(data):
             }
             save_macros(macros)
             emit('macros_updated', macros)
+    except Exception as e:
+        emit('error', str(e))
+
+
+def get_active_controllers_info():
+    """Get information about all active controllers"""
+    controllers_info = []
+    for controller_index, info in ACTIVE_CONTROLLERS.items():
+        # Get current controller state
+        controller_state = nxbt.state.get(controller_index, {})
+        
+        controllers_info.append({
+            'index': controller_index,
+            'mac_address': info['mac_address'],
+            'created_at': info['created_at'],
+            'controller_type': info['controller_type'],
+            'client_count': len(info['clients']),
+            'state': controller_state.get('state', 'unknown'),
+            'connected_switch': info['mac_address'] if info['mac_address'] else 'New Switch'
+        })
+    
+    return controllers_info
+
+
+@sio.on('get_active_controllers')
+def on_get_active_controllers():
+    """Get list of all active controllers"""
+    emit('active_controllers', get_active_controllers_info())
+
+
+@sio.on('join_controller_session')
+def on_join_controller_session(controller_index):
+    """Join an existing controller session"""
+    try:
+        controller_index = int(controller_index)
+        
+        with user_info_lock:
+            if controller_index in ACTIVE_CONTROLLERS:
+                # Add this session to the controller's client list
+                ACTIVE_CONTROLLERS[controller_index]['clients'].add(request.sid)
+                SESSION_TO_CONTROLLER[request.sid] = controller_index
+                
+                # Update user info
+                USER_INFO[request.sid]["controller_index"] = controller_index
+                USER_INFO[request.sid]["target_mac"] = ACTIVE_CONTROLLERS[controller_index]['mac_address']
+                
+                emit('joined_controller_session', {
+                    'controller_index': controller_index,
+                    'mac_address': ACTIVE_CONTROLLERS[controller_index]['mac_address'],
+                    'created_at': ACTIVE_CONTROLLERS[controller_index]['created_at']
+                })
+                
+                # Broadcast updated active controllers
+                sio.emit('active_controllers', get_active_controllers_info())
+            else:
+                emit('error', 'Controller session not found')
+    except Exception as e:
+        emit('error', str(e))
+
+
+@sio.on('leave_controller_session')
+def on_leave_controller_session():
+    """Leave the current controller session without removing the controller"""
+    try:
+        with user_info_lock:
+            if request.sid in SESSION_TO_CONTROLLER:
+                controller_index = SESSION_TO_CONTROLLER[request.sid]
+                
+                # Remove this client from the controller's client list
+                if controller_index in ACTIVE_CONTROLLERS:
+                    ACTIVE_CONTROLLERS[controller_index]['clients'].discard(request.sid)
+                    
+                    # Don't remove controller, just disconnect this session
+                    print(f"Session {request.sid} left controller {controller_index}")
+                
+                del SESSION_TO_CONTROLLER[request.sid]
+                
+                # Clear user info controller data
+                if "controller_index" in USER_INFO[request.sid]:
+                    del USER_INFO[request.sid]["controller_index"]
+                if "target_mac" in USER_INFO[request.sid]:
+                    del USER_INFO[request.sid]["target_mac"]
+                
+                emit('left_controller_session', {'controller_index': controller_index})
+                
+                # Broadcast updated active controllers
+                sio.emit('active_controllers', get_active_controllers_info())
+    except Exception as e:
+        emit('error', str(e))
+
+
+@sio.on('force_remove_controller')
+def on_force_remove_controller(controller_index):
+    """Forcefully remove a controller session (admin action)"""
+    try:
+        controller_index = int(controller_index)
+        
+        with user_info_lock:
+            if controller_index in ACTIVE_CONTROLLERS:
+                # Notify all clients using this controller
+                for client_id in ACTIVE_CONTROLLERS[controller_index]['clients'].copy():
+                    sio.emit('controller_force_removed', {
+                        'controller_index': controller_index
+                    }, room=client_id)
+                    
+                    # Clean up session mappings
+                    if client_id in SESSION_TO_CONTROLLER:
+                        del SESSION_TO_CONTROLLER[client_id]
+                    
+                    # Clear user info
+                    if client_id in USER_INFO:
+                        USER_INFO[client_id].pop("controller_index", None)
+                        USER_INFO[client_id].pop("target_mac", None)
+                
+                # Remove controller
+                nxbt.remove_controller(controller_index)
+                del ACTIVE_CONTROLLERS[controller_index]
+                
+                # Broadcast updated active controllers
+                sio.emit('active_controllers', get_active_controllers_info())
+                
+                emit('controller_removed', {'controller_index': controller_index})
+            else:
+                emit('error', 'Controller not found')
     except Exception as e:
         emit('error', str(e))
 

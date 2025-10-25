@@ -206,11 +206,13 @@ socket.on('connect', function() {
     console.log("Connected");
     socket.emit('get_switch_macs');
     socket.emit('get_macros');
+    socket.emit('get_active_controllers');
 });
 
 checkForLoadInterval = false;
 socket.on('create_pro_controller', function(index) {
     NXBT_CONTROLLER_INDEX = index;
+    CURRENT_SESSION_INDEX = index;
     checkForLoadInterval = setInterval(checkForLoad, 1000);
 });
 
@@ -437,6 +439,9 @@ function checkForLoad() {
                 HTML_STATUS_INDICATOR.classList.remove('hidden');
                 setInterval(updateStatusIndicator, 1000);
                 eventLoop();
+                
+                // Update session information
+                updateCurrentSessionInfo();
             }, 1000);
         }
     }
@@ -736,6 +741,157 @@ function stopRunningMacro() {
 window.addEventListener('load', function() {
     socket.emit('get_macro_status');
 });
+
+/**********************************************/
+/* Active Sessions Management */
+/**********************************************/
+
+let ACTIVE_SESSIONS = [];
+let CURRENT_SESSION_INDEX = null;
+
+socket.on('active_controllers', function(controllers) {
+    ACTIVE_SESSIONS = controllers;
+    updateActiveSessionsList();
+    updateCurrentSessionInfo();
+});
+
+socket.on('joined_controller_session', function(data) {
+    CURRENT_SESSION_INDEX = data.controller_index;
+    NXBT_CONTROLLER_INDEX = data.controller_index;
+    
+    // Hide controller selection and show controller config
+    HTML_CONTROLLER_SELECTION.classList.add('hidden');
+    HTML_CONTROLLER_CONFIG.classList.remove('hidden');
+    HTML_STATUS_INDICATOR.classList.remove('hidden');
+    
+    // Start monitoring
+    checkForLoadInterval = setInterval(checkForLoad, 1000);
+    setInterval(updateStatusIndicator, 1000);
+    eventLoop();
+    
+    updateCurrentSessionInfo();
+});
+
+socket.on('left_controller_session', function(data) {
+    CURRENT_SESSION_INDEX = null;
+    NXBT_CONTROLLER_INDEX = false;
+    
+    // Show controller selection and hide controller config
+    HTML_CONTROLLER_SELECTION.classList.remove('hidden');
+    HTML_CONTROLLER_CONFIG.classList.add('hidden');
+    HTML_STATUS_INDICATOR.classList.add('hidden');
+    
+    // Stop monitoring
+    if (checkForLoadInterval) {
+        clearInterval(checkForLoadInterval);
+    }
+});
+
+socket.on('controller_force_removed', function(data) {
+    alert(`Controller session ${data.controller_index} was removed by another client.`);
+    
+    CURRENT_SESSION_INDEX = null;
+    NXBT_CONTROLLER_INDEX = false;
+    
+    // Show controller selection and hide controller config
+    HTML_CONTROLLER_SELECTION.classList.remove('hidden');
+    HTML_CONTROLLER_CONFIG.classList.add('hidden');
+    HTML_STATUS_INDICATOR.classList.add('hidden');
+});
+
+function updateActiveSessionsList() {
+    let container = document.getElementById('active-sessions-list');
+    container.innerHTML = '';
+    
+    if (ACTIVE_SESSIONS.length === 0) {
+        container.innerHTML = '<p class="no-sessions-msg">No active controller sessions. Create a new controller to start.</p>';
+        return;
+    }
+    
+    ACTIVE_SESSIONS.forEach(function(session) {
+        let sessionCard = document.createElement('div');
+        sessionCard.className = 'surface session-card';
+        
+        let stateClass = '';
+        let stateText = session.state;
+        if (session.state === 'connected') {
+            stateClass = 'status-connected';
+        } else if (session.state === 'connecting' || session.state === 'reconnecting') {
+            stateClass = 'status-connecting';
+        } else {
+            stateClass = 'status-error';
+        }
+        
+        let isCurrentSession = session.index === CURRENT_SESSION_INDEX;
+        
+        sessionCard.innerHTML = `
+            <div class="session-card-info">
+                <div class="session-header">
+                    <h3>Controller ${session.index}</h3>
+                    <span class="session-status ${stateClass}">${stateText.toUpperCase()}</span>
+                </div>
+                <p class="session-switch">
+                    <strong>Switch:</strong> ${session.connected_switch}
+                </p>
+                <p class="session-details">
+                    <strong>Type:</strong> ${session.controller_type} | 
+                    <strong>Clients:</strong> ${session.client_count} | 
+                    <strong>Created:</strong> ${new Date(session.created_at).toLocaleString()}
+                </p>
+                ${isCurrentSession ? '<p class="current-session-indicator"><strong>✓ Currently Connected</strong></p>' : ''}
+            </div>
+            <div class="session-actions">
+                ${!isCurrentSession ? `<button onclick="joinControllerSession(${session.index})">Join Session</button>` : ''}
+                <button onclick="forceRemoveController(${session.index})" class="delete-btn">Remove</button>
+            </div>
+        `;
+        
+        container.appendChild(sessionCard);
+    });
+}
+
+function updateCurrentSessionInfo() {
+    let indexSpan = document.getElementById('session-controller-index');
+    let switchSpan = document.getElementById('session-switch-name');
+    let clientSpan = document.getElementById('session-client-count');
+    
+    if (CURRENT_SESSION_INDEX !== null) {
+        let currentSession = ACTIVE_SESSIONS.find(s => s.index === CURRENT_SESSION_INDEX);
+        if (currentSession) {
+            indexSpan.textContent = currentSession.index;
+            switchSpan.textContent = currentSession.connected_switch;
+            clientSpan.textContent = `${currentSession.client_count} client(s)`;
+        }
+    } else {
+        indexSpan.textContent = '-';
+        switchSpan.textContent = 'Not connected';
+        clientSpan.textContent = '0 clients';
+    }
+}
+
+function joinControllerSession(controllerIndex) {
+    socket.emit('join_controller_session', controllerIndex);
+}
+
+function leaveControllerSession() {
+    if (CURRENT_SESSION_INDEX !== null) {
+        socket.emit('leave_controller_session');
+    }
+}
+
+function forceRemoveController(controllerIndex = null) {
+    let indexToRemove = controllerIndex || CURRENT_SESSION_INDEX;
+    
+    if (indexToRemove !== null) {
+        if (confirm(`Are you sure you want to remove controller ${indexToRemove}? This will disconnect all clients.`)) {
+            socket.emit('force_remove_controller', indexToRemove);
+        }
+    }
+}
+
+function refreshActiveSessions() {
+    socket.emit('get_active_controllers');
+}
 
 /**********************************************/
 /* Switch MAC Address Management */
